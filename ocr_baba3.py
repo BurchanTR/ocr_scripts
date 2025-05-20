@@ -309,7 +309,6 @@ def process_rows():
     if not bring_investing_app_to_front():
         print("⚠️ Please open the investing app in Firefox private window and re-run the script.")
         sys.exit(1)
-    # Ensure focus to Right Region at the start
 
     activate_scroll_area()
     scroll_to_top_fast()
@@ -317,42 +316,96 @@ def process_rows():
     if DEBUG_MODE:
         show_highlight_box(bbox, highlight_duration)
 
-    full_img = capture_screen()
+    # Döngü kontrolü için değişkenler
+    previous_results = []  # Önceki turun sonuçları
+    same_list_count = 0   # Aynı liste sayacı
+    current_row = 2       # Excel'de yazılacak satır (1. satır başlık)
+    all_results = []      # Tüm sonuçları saklamak için
+    page_number = 0       # Sayfa numarası takibi
 
-    start = mark_start()
+    while same_list_count < 2:  # İki kez aynı liste gelene kadar devam et
+        page_number += 1
+        print(f"\n📄 Sayfa {page_number} işleniyor...")
+        
+        full_img = capture_screen()
+        
+        if DEBUG_MODE:
+            show_highlight_box(bbox, highlight_duration)
 
-    results = []
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = [executor.submit(process_single_row, i, full_img) for i in range(NUM_ROWS)]
-        for future in futures:
-            results.append(future.result())
+        start = mark_start()
 
-    # Sort by row index to ensure correct Excel order
-    results.sort(key=lambda x: x[0])
+        results = []
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            # Her satır için sayfa numarasını da ekleyerek işle
+            futures = [executor.submit(process_single_row, i, full_img) for i in range(NUM_ROWS)]
+            for future in futures:
+                row_result = future.result()
+                # Sayfa numarasını da ekle
+                results.append((page_number, *row_result))
 
-    # Excel output
-    for i, symbol_text, price_text in results:
-        ws.range(f"A{i+2}").value = symbol_text
-        ws.range(f"B{i+2}").value = price_text
+        # Önce sayfa numarasına, sonra satır indeksine göre sırala
+        results.sort(key=lambda x: (x[0], x[1]))
 
-    end = mark_end()
+        # Eğer önceki liste varsa karşılaştır (sadece sembolleri karşılaştır)
+        if previous_results:
+            if compare_stock_lists(previous_results, results):
+                same_list_count += 1
+                print(f"⚠️ Aynı liste tespit edildi! (Sayaç: {same_list_count})")
+            else:
+                same_list_count = 0  # Farklı liste geldi, sayacı sıfırla
+                print("✅ Yeni veriler tespit edildi.")
 
-    if DEBUG_MODE:
-        results.sort(key=lambda x: x[0])  # Sort by index        
-        texts = [(s, p) for _, s, p in results]
-        draw_debug_rectangles_with_text(full_img, texts)
+        # Sonuçları Excel'e yaz (sayfa numarasını atla)
+        for _, _, symbol_text, price_text in results:
+            ws.range(f"A{current_row}").value = symbol_text
+            ws.range(f"B{current_row}").value = price_text
+            current_row += 1
 
-    # 🔁 Return focus to Excel
+        # Sonuçları sakla
+        all_results.extend(results)
+        previous_results = results.copy()
+
+        if DEBUG_MODE:
+            # Debug görüntüsü için sayfa numarasını atla
+            texts = [(s, p) for _, _, s, p in results]
+            draw_debug_rectangles_with_text(full_img, texts)
+
+        # Sonraki sayfa için scroll yap
+        scroll_down()
+        time.sleep(0.5)  # Scroll animasyonunun tamamlanması için bekle
+
+        end = mark_end()
+
+    print(f"✅ İşlem tamamlandı! Toplam {len(all_results)} veri işlendi.")
+
+    # Excel'e odaklan
     excel_windows = [w for w in gw.getWindowsWithTitle("Excel") if w.visible]
-
     if excel_windows:
         excel_window = excel_windows[0]
         excel_window.activate()
-        # Optional: maximize if you want full screen
-        # excel_window.maximize()
-        print("✅ Focus returned to Excel.")
+        print("✅ Excel'e odaklanıldı.")
     else:
-        print("❌ Excel window not found.")
+        print("❌ Excel penceresi bulunamadı.")
+
+def compare_stock_lists(previous_list, current_list):
+    """
+    İki senet listesini karşılaştırır.
+    
+    Args:
+        previous_list: Önceki turda elde edilen (sembol, fiyat) tuple'larının listesi
+        current_list: Mevcut turda elde edilen (sembol, fiyat) tuple'larının listesi
+    
+    Returns:
+        bool: Listeler aynı ise True, farklı ise False
+    """
+    if len(previous_list) != len(current_list):
+        return False
+    
+    # Sadece sembolleri karşılaştır (fiyatları değil)
+    previous_symbols = [item[1] for item in previous_list]  # item[1] sembol
+    current_symbols = [item[1] for item in current_list]    # item[1] sembol
+    
+    return previous_symbols == current_symbols
 
 # ==== RUN ====
 if __name__ == "__main__":
